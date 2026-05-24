@@ -21,12 +21,13 @@ app = Flask(__name__)
 # ---------------------------------------------------------------------------
 
 BOT_PATHS = {
+
     "The Aggressor":    "bots/aggressor/bot.py",
     "The Mathematician":"bots/mathematician/bot.py",
     "The Shark":        "bots/shark/bot.py",
     "Template Bot A":   "bots/template/bot.py",
-    "Pot-Odds Bot B":   "bots/ref_bot_2/bot.py",
-    "Template Bot C":   "bots/template/bot.py",
+    "Maximus Bot":   "bots/maximus_bot/bot.py",
+#    "heuristic": "evolution/bots/heuristic/h_000.py",
 }
 
 state = {
@@ -283,7 +284,7 @@ def run_single_match():
     emit(f"Starting match {match_id}...", "dim")
     t0 = time.time()
 
-    result = run_match(match_id, BOT_PATHS, n_hands=150, verbose=False)
+    result = run_match(match_id, BOT_PATHS, n_hands=400, verbose=False)
     elapsed = time.time() - t0
 
     emit(f"Match complete in {elapsed:.1f}s", "dim")
@@ -323,7 +324,7 @@ def run_tournament():
     state["standings"] = []
     all_results = []
 
-    for rnd in range(1, 4):
+    for rnd in range(1, 30):
         state["round"] = rnd
         emit(f"=== ROUND {rnd} ===", "bold")
 
@@ -338,7 +339,7 @@ def run_tournament():
 
             emit(f"  Table {t_idx+1}: {', '.join(bot_paths_for_match.keys())}", "dim")
 
-            result = run_match(match_id, bot_paths_for_match, n_hands=150)
+            result = run_match(match_id, bot_paths_for_match, n_hands=400)
 
             for bid, delta in result["chip_delta"].items():
                 all_results.append({
