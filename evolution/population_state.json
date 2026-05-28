@@ -1,0 +1,34 @@
+{
+  "generation": 0,
+  "bots": {
+    "heuristic": [
+      {
+        "id": "h_000",
+        "path": "evolution/bots\\heuristic\\h_000.py",
+        "species": "heuristic",
+        "ev": 0.0
+      }
+    ],
+    "lookup": [
+      {
+        "id": "l_000",
+        "path": "evolution/bots\\lookup\\l_000.py",
+        "species": "lookup",
+        "ev": 0.0
+      }
+    ],
+    "blueprint": [
+      {
+        "id": "b_000",
+        "path": "evolution/bots\\blueprint\\b_000.py",
+        "species": "blueprint",
+        "ev": 0.0
+      }
+    ]
+  },
+  "next_id": {
+    "heuristic": 1,
+    "lookup": 1,
+    "blueprint": 1
+  }
+}

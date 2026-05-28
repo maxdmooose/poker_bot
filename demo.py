@@ -26,7 +26,15 @@ BOT_PATHS = {
     "The Mathematician":"bots/mathematician/bot.py",
     "The Shark":        "bots/shark/bot.py",
     "Template Bot A":   "bots/template/bot.py",
-    "Maximus Bot":   "bots/maximus_bot/bot.py",
+    "MC.1.0":   "bots/maximus_bot/bot.py",
+    "MC.1.1":   "bots/maximus_bot/bot2.py",
+    
+#    "MC.1.2":   "bots/maximus_bot/bot3.py",
+#   "MC.1.3":   "bots/maximus_bot/best.py",
+   "miniCFR":   "bots/maximus_bot/bot4.py",
+#    "CFR":   "bots/maximus_bot/CFR.py",
+#    "GT.1.0":   "bots/maximus_bot/gametree.py",
+#    "GT.1.1":   "bots/maximus_bot/longtree.py",
 #    "heuristic": "evolution/bots/heuristic/h_000.py",
 }
 
@@ -284,7 +292,7 @@ def run_single_match():
     emit(f"Starting match {match_id}...", "dim")
     t0 = time.time()
 
-    result = run_match(match_id, BOT_PATHS, n_hands=400, verbose=False)
+    result = run_match(match_id, BOT_PATHS, n_hands=150, verbose=False)
     elapsed = time.time() - t0
 
     emit(f"Match complete in {elapsed:.1f}s", "dim")
@@ -339,7 +347,7 @@ def run_tournament():
 
             emit(f"  Table {t_idx+1}: {', '.join(bot_paths_for_match.keys())}", "dim")
 
-            result = run_match(match_id, bot_paths_for_match, n_hands=400)
+            result = run_match(match_id, bot_paths_for_match, n_hands=150)
 
             for bid, delta in result["chip_delta"].items():
                 all_results.append({
