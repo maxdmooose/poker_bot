@@ -1,9 +1,8 @@
-# bot.py — Hybrid MCCFR + Monte Carlo + depth-limited solver (timing-safe)
-# - Multi-street information sets (street, bucket, pot_class, action_class, position)
-# - CFR-style regret matching with 5 actions (fold/check, call, small/med/large bet/raise)
-# - Monte Carlo equity vs random
-# - Light depth-limited lookahead for postflop
-# - Uses ~1.7–1.9s per decision and always returns a valid action
+# bot.py — DeepStack-lite CFR + value approximation bot
+# - Depth-limited lookahead with CFR-style policies at nodes
+# - Value function = Monte Carlo equity vs random (or simple range)
+# - Multi-action abstraction (fold/check, call, small/med/large bet)
+# - Uses ~2s per decision
 
 import random
 import time
@@ -14,8 +13,6 @@ RANKS = "23456789TJQKA"
 SUITS = "cdhs"
 FULL_DECK = [r + s for r in RANKS for s in SUITS]
 
-# ------------------ SAFE EVAL ------------------
-
 def safe_eval(cards):
     try:
         if len(cards) < 5:
@@ -23,8 +20,6 @@ def safe_eval(cards):
         return eval7.evaluate(cards[:7])
     except Exception:
         return 0
-
-# ------------------ BUCKETING & FEATURES ------------------
 
 def preflop_bucket(cards):
     c1, c2 = cards
@@ -36,7 +31,6 @@ def preflop_bucket(cards):
     pair = (r1 == r2)
     suited = (s1 == s2)
     gap = abs(i1 - i2) - 1
-
     if pair and high >= RANKS.index("T"):
         return 3
     if pair and high >= RANKS.index("7"):
@@ -94,9 +88,41 @@ def action_class(state):
 
 def position_class(state):
     log = state.get("action_log", [])
-    return 0 if len(log) == 0 else 1  # 0 = OOP-ish, 1 = IP-ish
+    return 0 if len(log) == 0 else 1
 
-# ------------------ MONTE CARLO EQUITY ------------------
+REGRETS = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0])
+STRAT_SUM = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0])
+
+BLUEPRINT = {
+    "preflop": {
+        0: [0.75, 0.20, 0.05, 0.0, 0.0],
+        1: [0.25, 0.50, 0.20, 0.05, 0.0],
+        2: [0.05, 0.35, 0.35, 0.20, 0.05],
+        3: [0.0, 0.15, 0.35, 0.30, 0.20],
+    },
+    "postflop": {
+        0: [0.85, 0.10, 0.03, 0.015, 0.005],
+        1: [0.40, 0.45, 0.10, 0.04, 0.01],
+        2: [0.10, 0.40, 0.25, 0.20, 0.05],
+        3: [0.02, 0.10, 0.25, 0.35, 0.28],
+    }
+}
+
+def regret_matching(regrets, blueprint):
+    pos = [max(r, 0.0) for r in regrets]
+    s = sum(pos)
+    if s > 1e-9:
+        return [r / s for r in pos]
+    return blueprint[:]
+
+def sample_from_probs(probs, rng):
+    r = rng.random()
+    cum = 0.0
+    for i, p in enumerate(probs):
+        cum += float(p)
+        if r <= cum:
+            return i
+    return len(probs) - 1
 
 def estimate_equity_timed(your_cards, board_cards, n_opps, time_limit, rng):
     start = time.perf_counter()
@@ -110,11 +136,7 @@ def estimate_equity_timed(your_cards, board_cards, n_opps, time_limit, rng):
     need = 5 - len(board_cards)
     if n_opps * 2 + max(0, need) > len(deck_eval):
         return 0.5
-
-    # hard cap on iterations to avoid pathological slowdowns
-    max_iters = 4000
-
-    while time.perf_counter() - start < time_limit and iters < max_iters:
+    while time.perf_counter() - start < time_limit:
         rng.shuffle(deck_eval)
         idx = 0
         opps = []
@@ -137,49 +159,20 @@ def estimate_equity_timed(your_cards, board_cards, n_opps, time_limit, rng):
         elif better == 0:
             ties += 1
         iters += 1
-
     if iters == 0:
         return 0.5
     return (wins + 0.5 * ties) / iters
 
-# ------------------ CFR STRUCTURES ------------------
-
-# Actions: 0 = fold/check, 1 = call, 2 = small, 3 = medium, 4 = large
-BLUEPRINT = {
-    "preflop": {
-        0: [0.75, 0.20, 0.05, 0.0, 0.0],
-        1: [0.25, 0.50, 0.20, 0.05, 0.0],
-        2: [0.05, 0.35, 0.35, 0.20, 0.05],
-        3: [0.0, 0.15, 0.35, 0.30, 0.20],
-    },
-    "postflop": {
-        0: [0.85, 0.10, 0.03, 0.015, 0.005],
-        1: [0.40, 0.45, 0.10, 0.04, 0.01],
-        2: [0.10, 0.40, 0.25, 0.20, 0.05],
-        3: [0.02, 0.10, 0.25, 0.35, 0.28],
-    }
-}
-
-REGRETS = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0])
-STRAT_SUM = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0])
-
-def regret_matching(regrets, blueprint):
-    pos = [max(r, 0.0) for r in regrets]
-    s = sum(pos)
-    if s > 1e-9:
-        return [r / s for r in pos]
-    return blueprint[:]
-
-def sample_from_probs(probs, rng):
-    r = rng.random()
-    cum = 0.0
-    for i, p in enumerate(probs):
-        cum += float(p)
-        if r <= cum:
-            return i
-    return len(probs) - 1
-
-# ------------------ STATE HELPERS ------------------
+def value_function(state, your_cards, board, n_opps, time_left, rng):
+    if time_left() <= 0:
+        return 0.0
+    pot = float(state["pot"])
+    to_call = float(state["amount_owed"])
+    eq_time = min(0.4, max(0.1, time_left() * 0.5))
+    equity = estimate_equity_timed(your_cards, board, n_opps, eq_time, rng)
+    win_pot = pot + to_call
+    call_ev = equity * win_pot - (1 - equity) * to_call
+    return max(0.0, call_ev)
 
 def clone_state(state):
     return {
@@ -196,23 +189,8 @@ def clone_state(state):
         "action_log": state["action_log"],
     }
 
-# ------------------ VALUE FUNCTION ------------------
-
-def value_function(state, your_cards, board, n_opps, time_left, rng):
-    if time_left() <= 0:
-        return 0.0
-    pot = float(state["pot"])
-    to_call = float(state["amount_owed"])
-    eq_time = min(0.25, max(0.05, time_left() * 0.4))
-    equity = estimate_equity_timed(your_cards, board, n_opps, eq_time, rng)
-    win_pot = pot + to_call
-    call_ev = equity * win_pot - (1 - equity) * to_call
-    return max(0.0, call_ev)
-
-# ------------------ HYBRID MCCFR + DEPTH-LIMITED NODE ------------------
-
-def hybrid_node(state, your_cards, board, n_opps, depth, max_depth, time_left, rng, reach_prob):
-    if depth >= max_depth or time_left() <= 0.02:
+def deepstack_node(state, your_cards, board, n_opps, depth, max_depth, time_left, rng, reach_prob):
+    if depth >= max_depth or time_left() <= 0:
         return value_function(state, your_cards, board, n_opps, time_left, rng)
 
     pot = float(state["pot"])
@@ -227,7 +205,7 @@ def hybrid_node(state, your_cards, board, n_opps, depth, max_depth, time_left, r
         bucket = preflop_bucket(your_cards)
         mode = "preflop"
     else:
-        eq_time = min(0.18, max(0.04, time_left() * 0.25))
+        eq_time = min(0.25, max(0.05, time_left() * 0.3))
         equity = estimate_equity_timed(your_cards, board, n_opps, eq_time, rng)
         tex = board_texture(board)
         bucket = postflop_bucket(equity, tex)
@@ -242,10 +220,14 @@ def hybrid_node(state, your_cards, board, n_opps, depth, max_depth, time_left, r
     regrets = REGRETS[IS]
     strat = regret_matching(regrets, blueprint)
 
+    # actions: 0 fold/check, 1 call, 2 small, 3 med, 4 large
     evs = [0.0] * 5
 
     # fold/check
-    evs[0] = 0.0
+    if to_call > 0:
+        evs[0] = 0.0
+    else:
+        evs[0] = 0.0
 
     # call
     if to_call > 0:
@@ -254,18 +236,17 @@ def hybrid_node(state, your_cards, board, n_opps, depth, max_depth, time_left, r
         call_state["your_stack"] = max(0.0, stack - to_call)
         call_state["amount_owed"] = 0.0
         call_state["can_check"] = True
-        evs[1] = hybrid_node(call_state, your_cards, board, n_opps,
-                             depth + 1, max_depth, time_left, rng, reach_prob * strat[1])
+        evs[1] = deepstack_node(call_state, your_cards, board, n_opps,
+                                depth + 1, max_depth, time_left, rng, reach_prob * strat[1])
     else:
         evs[1] = 0.0
 
+    # bet/raise sizes
     mults_call = {2: 2.0, 3: 2.7, 4: 3.5}
     mults_bet = {2: 0.5, 3: 0.8, 4: 1.1}
 
     if to_call > 0:
         for idx, mult in mults_call.items():
-            if time_left() <= 0.02:
-                break
             total = max(min_raise_to, int(current_bet + mult * to_call))
             total = min(total, int(current_bet + stack))
             if total <= current_bet + to_call:
@@ -277,12 +258,10 @@ def hybrid_node(state, your_cards, board, n_opps, depth, max_depth, time_left, r
                 raise_state["your_stack"] = max(0.0, stack - risk - to_call)
                 raise_state["amount_owed"] = 0.0
                 raise_state["can_check"] = True
-                evs[idx] = hybrid_node(raise_state, your_cards, board, n_opps,
-                                       depth + 1, max_depth, time_left, rng, reach_prob * strat[idx])
+                evs[idx] = deepstack_node(raise_state, your_cards, board, n_opps,
+                                          depth + 1, max_depth, time_left, rng, reach_prob * strat[idx])
     else:
         for idx, mult in mults_bet.items():
-            if time_left() <= 0.02:
-                break
             total = max(min_raise_to, int(current_bet + pot * mult))
             total = min(total, int(current_bet + stack))
             if total <= current_bet:
@@ -294,21 +273,20 @@ def hybrid_node(state, your_cards, board, n_opps, depth, max_depth, time_left, r
                 bet_state["your_stack"] = max(0.0, stack - risk)
                 bet_state["amount_owed"] = 0.0
                 bet_state["can_check"] = True
-                evs[idx] = hybrid_node(bet_state, your_cards, board, n_opps,
-                                       depth + 1, max_depth, time_left, rng, reach_prob * strat[idx])
+                evs[idx] = deepstack_node(bet_state, your_cards, board, n_opps,
+                                          depth + 1, max_depth, time_left, rng, reach_prob * strat[idx])
 
     strat_ev = sum(p * e for p, e in zip(strat, evs))
     for i in range(5):
         REGRETS[IS][i] += reach_prob * (evs[i] - strat_ev)
         STRAT_SUM[IS][i] += reach_prob * strat[i]
 
+    # return EV of best action (for value backup)
     return max(evs)
-
-# ------------------ MAIN DECIDE ------------------
 
 def decide(state: dict) -> dict:
     start = time.perf_counter()
-    BUDGET = 1.85  # safer than 1.95
+    BUDGET = 1.95
 
     def time_left():
         return BUDGET - (time.perf_counter() - start)
@@ -332,23 +310,14 @@ def decide(state: dict) -> dict:
         rng = random.Random()
 
         max_depth = 3
+        deepstack_node(state, your_cards, board, n_opps, 0, max_depth, time_left, rng, reach_prob=1.0)
 
-        # a few hybrid passes, but with stricter time guard
-        iters = 0
-        while time_left() > 0.30 and iters < 6:
-            hybrid_node(state, your_cards, board, n_opps, 0, max_depth, time_left, rng, reach_prob=1.0)
-            iters += 1
-
-        # light filler to stabilize but with generous margin
-        while time_left() > 0.12:
-            _ = estimate_equity_timed(your_cards, board, n_opps, min(0.02, time_left()), rng)
-
-        # choose action from current strategy at root IS
+        # choose action greedily from current strategy
         if street == "preflop":
             bucket = preflop_bucket(your_cards)
             mode = "preflop"
         else:
-            eq_time = min(0.18, max(0.04, time_left() * 0.4))
+            eq_time = min(0.25, max(0.05, time_left() * 0.3))
             equity = estimate_equity_timed(your_cards, board, n_opps, eq_time, rng)
             tex = board_texture(board)
             bucket = postflop_bucket(equity, tex)
@@ -364,7 +333,6 @@ def decide(state: dict) -> dict:
         strat = regret_matching(regrets, blueprint)
         a = sample_from_probs(strat, rng)
 
-        # Map to engine action
         if to_call > 0:
             if a == 0:
                 return {"action": "fold"}

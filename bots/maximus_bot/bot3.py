@@ -1,4 +1,4 @@
-# bot.py — Fullhouse Monte Carlo "maxed" bot
+# bot.py — Fullhouse Monte Carlo "maxed" bot (safe version)
 
 import random
 import time
@@ -9,7 +9,21 @@ SUITS = "cdhs"
 FULL_DECK = [r + s for r in RANKS for s in SUITS]
 
 
-def estimate_equity_multi_timed(your_cards, board_cards, n_opponents, time_limit=1):
+# ------------------ SAFE EVAL7 WRAPPER ------------------
+
+def safe_eval(cards):
+    """eval7.evaluate but guaranteed not to crash."""
+    try:
+        if len(cards) < 5:
+            return 0
+        return eval7.evaluate(cards[:7])
+    except Exception:
+        return 0
+
+
+# ------------------ EQUITY ------------------
+
+def estimate_equity_multi_timed(your_cards, board_cards, n_opponents, time_limit=1.0):
     """
     Monte Carlo equity vs n_opponents random hands.
     Time-bounded to ~time_limit seconds.
@@ -27,15 +41,15 @@ def estimate_equity_multi_timed(your_cards, board_cards, n_opponents, time_limit
     iters = 0
     board_needed = 5 - len(board_cards)
 
-    while True:
-        if time.perf_counter() - start >= time_limit:
-            break
+    # sanity: if we can't even deal everyone + board, bail to neutral
+    if n_opponents * 2 + max(0, board_needed) > len(deck_eval):
+        return 0.5
 
+    while time.perf_counter() - start < time_limit:
         random.shuffle(deck_eval)
 
-        # deal opponents
-        opp_hands = []
         idx = 0
+        opp_hands = []
         for _ in range(n_opponents):
             opp_hands.append(deck_eval[idx:idx+2])
             idx += 2
@@ -44,12 +58,11 @@ def estimate_equity_multi_timed(your_cards, board_cards, n_opponents, time_limit
         if board_needed > 0:
             sim_board = sim_board + deck_eval[idx:idx + board_needed]
 
-        our_score = eval7.evaluate(your_eval + sim_board)
+        our_score = safe_eval(your_eval + sim_board)
 
-        better = 0
-        equal = 0
+        better = equal = 0
         for opp in opp_hands:
-            opp_score = eval7.evaluate(opp + sim_board)
+            opp_score = safe_eval(opp + sim_board)
             if opp_score > our_score:
                 better += 1
             elif opp_score == our_score:
@@ -67,6 +80,8 @@ def estimate_equity_multi_timed(your_cards, board_cards, n_opponents, time_limit
 
     return (wins + 0.5 * ties) / iters
 
+
+# ------------------ BOARD TEXTURE ------------------
 
 def board_texture_features(board_cards):
     """
@@ -100,16 +115,18 @@ def board_texture_features(board_cards):
     }
 
 
+# ------------------ OPPONENT MODEL ------------------
+
 def opponent_aggression_factor(state):
     """
     Crude opponent model from action_log:
     ratio of raises/bets to (raises+bets+calls).
     """
-    log = state["action_log"]
+    log = state.get("action_log", [])
     raises = 0
     calls = 0
     for entry in log:
-        act = entry["action"]
+        act = entry.get("action")
         if act in ("raise", "bet"):
             raises += 1
         elif act == "call":
@@ -122,186 +139,184 @@ def opponent_aggression_factor(state):
     return 0.7 + 0.6 * agg
 
 
+# ------------------ MAIN STRATEGY ------------------
+
 def decide(state: dict) -> dict:
     """
     Fullhouse decide() entrypoint.
     """
-    your_cards = state["your_cards"]
-    board = state["community_cards"]
-    street = state["street"]
-    pot = float(state["pot"])
-    stack = float(state["your_stack"])
-    to_call = float(state["amount_owed"])
-    can_check = state["can_check"]
-    min_raise_to = int(state["min_raise_to"])
+    try:
+        your_cards = state["your_cards"]
+        board = state["community_cards"]
+        street = state["street"]
+        pot = float(state["pot"])
+        stack = float(state["your_stack"])
+        to_call = float(state["amount_owed"])
+        can_check = state["can_check"]
+        min_raise_to = int(state["min_raise_to"])
 
-    # trivial if no stack
-    if stack <= 0:
+        # trivial if no stack
+        if stack <= 0:
+            if to_call > 0:
+                return {"action": "call"}
+            return {"action": "check"} if can_check else {"action": "fold"}
+
+        # number of active opponents (not folded, not us)
+        n_opponents = sum(1 for p in state["players"] if not p.get("has_folded", False)) - 1
+        n_opponents = max(1, n_opponents)
+
+        # equity vs full table, time-bounded
+        equity = estimate_equity_multi_timed(
+            your_cards,
+            board,
+            n_opponents=n_opponents,
+            time_limit=1.75,  # leaves ~0.25s for logic
+        )
+
+        # pot odds
         if to_call > 0:
+            pot_odds = to_call / (pot + to_call) if (pot + to_call) > 0 else 1.0
+        else:
+            pot_odds = 0.0
+
+        # base thresholds
+        margin = 0.03
+        if street == "preflop":
+            base_raise_thresh = 0.62
+            base_call_thresh = max(pot_odds + margin, 0.25)
+        elif street == "flop":
+            base_raise_thresh = 0.60
+            base_call_thresh = pot_odds + margin
+        elif street == "turn":
+            base_raise_thresh = 0.62
+            base_call_thresh = pot_odds + margin
+        else:  # river
+            base_raise_thresh = 0.66
+            base_call_thresh = pot_odds + margin
+
+        # opponent model tweaks
+        agg_factor = opponent_aggression_factor(state)
+        call_thresh = max(0.05, min(0.95, base_call_thresh * (1.0 - 0.15 * (agg_factor - 1.0))))
+        raise_thresh = max(0.05, min(0.95, base_raise_thresh * (1.0 - 0.10 * (agg_factor - 1.0))))
+
+        # board texture tweaks
+        texture = board_texture_features(board)
+        dry_board = not texture["connected"] and not texture["flushy"] and not texture["paired"]
+        wet_board = texture["connected"] or texture["flushy"]
+
+        r = random.random()
+
+        # ---------- Facing a bet ----------
+        if to_call > 0:
+            # fold region
+            if equity < call_thresh:
+                if pot_odds < 0.15 and equity > pot_odds and r < 0.25:
+                    return {"action": "call"}
+                if pot_odds < 0.20 and equity > pot_odds and agg_factor > 1.1 and r < 0.35:
+                    return {"action": "call"}
+                return {"action": "fold"}
+
+            # raise region
+            if equity >= raise_thresh and stack > to_call * 2:
+                base_freq = (equity - raise_thresh) / 0.2
+                if dry_board:
+                    base_freq += 0.10
+                if wet_board:
+                    base_freq -= 0.08
+                if agg_factor < 0.9:
+                    base_freq += 0.08
+                if agg_factor > 1.1:
+                    base_freq -= 0.05
+
+                raise_freq = min(0.9, max(0.15, base_freq))
+                if r < raise_freq:
+                    mult_min = 1.5 if wet_board else 1.8
+                    mult_max = 2.2 if wet_board else 2.7
+                    min_total = max(min_raise_to, int(state["current_bet"] + to_call * mult_min))
+                    max_total = int(min(state["current_bet"] + to_call * mult_max,
+                                        state["current_bet"] + stack))
+                    if max_total <= min_total:
+                        amount = min_total
+                    else:
+                        alpha = random.random()
+                        amount = int(min_total + alpha * (max_total - min_total))
+
+                    if amount >= state["current_bet"] + stack * 0.95:
+                        return {"action": "all_in"}
+
+                    return {"action": "raise", "amount": amount}
+
             return {"action": "call"}
-        return {"action": "check"} if can_check else {"action": "fold"}
 
-    # number of active opponents (not folded, not us)
-    n_opponents = sum(1 for p in state["players"] if not p["has_folded"]) - 1
-    n_opponents = max(1, n_opponents)
+        # ---------- No bet to call (we can check or bet) ----------
+        if can_check:
+            if equity >= raise_thresh:
+                value_freq = 0.85
+                if dry_board:
+                    value_freq += 0.05
+                if agg_factor < 0.9:
+                    value_freq += 0.05
+                value_freq = min(0.95, value_freq)
 
-    # equity vs full table, time-bounded
-    equity = estimate_equity_multi_timed(
-        your_cards,
-        board,
-        n_opponents=n_opponents,
-        time_limit=1.75,  # leaves ~0.25s for logic
-    )
+                if r < value_freq:
+                    if dry_board:
+                        min_mult, max_mult = 0.45, 1.0
+                    elif wet_board:
+                        min_mult, max_mult = 0.55, 1.2
+                    else:
+                        min_mult, max_mult = 0.5, 1.1
 
-    # pot odds
-    if to_call > 0:
-        pot_odds = to_call / (pot + to_call) if (pot + to_call) > 0 else 1.0
-    else:
-        pot_odds = 0.0
-
-    # base thresholds
-    margin = 0.03
-    if street == "preflop":
-        base_raise_thresh = 0.62
-        base_call_thresh = max(pot_odds + margin, 0.25)
-    elif street == "flop":
-        base_raise_thresh = 0.60
-        base_call_thresh = pot_odds + margin
-    elif street == "turn":
-        base_raise_thresh = 0.62
-        base_call_thresh = pot_odds + margin
-    else:  # river
-        base_raise_thresh = 0.66
-        base_call_thresh = pot_odds + margin
-
-    # opponent model tweaks
-    agg_factor = opponent_aggression_factor(state)
-    # more aggressive opponents -> call wider, raise a bit wider
-    call_thresh = max(0.05, min(0.95, base_call_thresh * (1.0 - 0.15 * (agg_factor - 1.0))))
-    raise_thresh = max(0.05, min(0.95, base_raise_thresh * (1.0 - 0.10 * (agg_factor - 1.0))))
-
-    # board texture tweaks
-    texture = board_texture_features(board)
-    dry_board = not texture["connected"] and not texture["flushy"] and not texture["paired"]
-    wet_board = texture["connected"] or texture["flushy"]
-
-    r = random.random()
-
-    # ---------- Facing a bet ----------
-    if to_call > 0:
-        # fold region
-        if equity < call_thresh:
-            # vs tiny bets, occasionally defend wider
-            if pot_odds < 0.15 and equity > pot_odds and r < 0.25:
-                return {"action": "call"}
-            # vs maniacs, defend a bit more
-            if pot_odds < 0.20 and equity > pot_odds and agg_factor > 1.1 and r < 0.35:
-                return {"action": "call"}
-            return {"action": "fold"}
-
-        # raise region
-        if equity >= raise_thresh and stack > to_call * 2:
-            base_freq = (equity - raise_thresh) / 0.2
-            # dry boards -> more raising; wet boards -> more calling
-            if dry_board:
-                base_freq += 0.10
-            if wet_board:
-                base_freq -= 0.08
-            # vs nits, raise more; vs maniacs, raise a bit less
-            if agg_factor < 0.9:
-                base_freq += 0.08
-            if agg_factor > 1.1:
-                base_freq -= 0.05
-
-            raise_freq = min(0.9, max(0.15, base_freq))
-            if r < raise_freq:
-                # size: between ~1.8x and ~2.5x raise, scaled by texture
-                mult_min = 1.5 if wet_board else 1.8
-                mult_max = 2.2 if wet_board else 2.7
-                min_total = max(min_raise_to, int(state["current_bet"] + to_call * mult_min))
-                max_total = int(min(state["current_bet"] + to_call * mult_max,
-                                    state["current_bet"] + stack))
-                if max_total <= min_total:
-                    amount = min_total
-                else:
+                    min_total = max(min_raise_to, state["current_bet"] + int(pot * min_mult))
+                    max_total = max(min_total, state["current_bet"] + int(pot * max_mult))
                     alpha = random.random()
                     amount = int(min_total + alpha * (max_total - min_total))
 
-                if amount >= state["current_bet"] + stack * 0.95:
-                    return {"action": "all_in"}
+                    if amount >= state["current_bet"] + stack * 0.95:
+                        return {"action": "all_in"}
 
-                return {"action": "raise", "amount": amount}
+                    return {"action": "raise", "amount": amount}
 
-        # profitable call but not strong enough to raise
-        return {"action": "call"}
-
-    # ---------- No bet to call (we can check or bet) ----------
-    if can_check:
-        # value betting
-        if equity >= raise_thresh:
-            value_freq = 0.85
-            if dry_board:
-                value_freq += 0.05
-            if agg_factor < 0.9:
-                value_freq += 0.05
-            value_freq = min(0.95, value_freq)
-
-            if r < value_freq:
-                # bet sizing by texture
-                if dry_board:
-                    min_mult, max_mult = 0.45, 1.0
-                elif wet_board:
-                    min_mult, max_mult = 0.55, 1.2
-                else:
-                    min_mult, max_mult = 0.5, 1.1
-
-                min_total = max(min_raise_to, state["current_bet"] + int(pot * min_mult))
-                max_total = max(min_total, state["current_bet"] + int(pot * max_mult))
-                alpha = random.random()
-                amount = int(min_total + alpha * (max_total - min_total))
-
-                if amount >= state["current_bet"] + stack * 0.95:
-                    return {"action": "all_in"}
-
-                return {"action": "raise", "amount": amount}
-            else:
                 return {"action": "check"}
 
-        # bluffing region
-        bluff_low, bluff_high = 0.18, 0.42
-        if bluff_low <= equity <= bluff_high and street in ("flop", "turn"):
-            base_bluff_freq = 0.18
-            if dry_board:
-                base_bluff_freq += 0.06
-            if wet_board:
-                base_bluff_freq -= 0.04
-            if texture["paired"]:
-                base_bluff_freq += 0.04
-            if agg_factor < 0.9:   # nits -> bluff more
-                base_bluff_freq += 0.05
-            if agg_factor > 1.1:   # maniacs -> bluff less
-                base_bluff_freq -= 0.05
-
-            base_bluff_freq = max(0.05, min(0.30, base_bluff_freq))
-
-            if r < base_bluff_freq:
+            bluff_low, bluff_high = 0.18, 0.42
+            if bluff_low <= equity <= bluff_high and street in ("flop", "turn"):
+                base_bluff_freq = 0.18
                 if dry_board:
-                    min_mult, max_mult = 0.45, 0.75
-                else:
-                    min_mult, max_mult = 0.55, 0.90
+                    base_bluff_freq += 0.06
+                if wet_board:
+                    base_bluff_freq -= 0.04
+                if texture["paired"]:
+                    base_bluff_freq += 0.04
+                if agg_factor < 0.9:
+                    base_bluff_freq += 0.05
+                if agg_factor > 1.1:
+                    base_bluff_freq -= 0.05
 
-                min_total = max(min_raise_to, state["current_bet"] + int(pot * min_mult))
-                max_total = max(min_total, state["current_bet"] + int(pot * max_mult))
-                alpha = random.random()
-                amount = int(min_total + alpha * (max_total - min_total))
+                base_bluff_freq = max(0.05, min(0.30, base_bluff_freq))
 
-                if amount >= state["current_bet"] + stack * 0.95:
-                    return {"action": "all_in"}
+                if r < base_bluff_freq:
+                    if dry_board:
+                        min_mult, max_mult = 0.45, 0.75
+                    else:
+                        min_mult, max_mult = 0.55, 0.90
 
-                return {"action": "raise", "amount": amount}
+                    min_total = max(min_raise_to, state["current_bet"] + int(pot * min_mult))
+                    max_total = max(min_total, state["current_bet"] + int(pot * max_mult))
+                    alpha = random.random()
+                    amount = int(min_total + alpha * (max_total - min_total))
 
-        # default: pot control / take free card
-        return {"action": "check"}
+                    if amount >= state["current_bet"] + stack * 0.95:
+                        return {"action": "all_in"}
 
-    # can't check but to_call == 0 is weird; default to call
-    return {"action": "call"}
+                    return {"action": "raise", "amount": amount}
+
+            return {"action": "check"}
+
+        # can't check but to_call == 0 is weird; default to call
+        return {"action": "call"}
+
+    except Exception:
+        # absolute safety net
+        if state.get("can_check", False) and state.get("amount_owed", 0) == 0:
+            return {"action": "check"}
+        return {"action": "call"}

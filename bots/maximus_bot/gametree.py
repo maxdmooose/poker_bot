@@ -13,48 +13,55 @@ FULL_DECK = [r + s for r in RANKS for s in SUITS]
 # ----------------- Equity evaluator -----------------
 
 def estimate_equity_vs_random(your_cards, board_cards, n_opponents, iters, rng):
-    your_eval = [eval7.Card(c) for c in your_cards]
-    board_eval = [eval7.Card(c) for c in board_cards]
+    try:
+        your_eval = [eval7.Card(c) for c in your_cards]
+        board_eval = [eval7.Card(c) for c in board_cards]
 
-    dead = set(your_cards + board_cards)
-    deck = [c for c in FULL_DECK if c not in dead]
-    deck_eval = [eval7.Card(c) for c in deck]
+        dead = set(your_cards + board_cards)
+        deck = [c for c in FULL_DECK if c not in dead]
+        deck_eval = [eval7.Card(c) for c in deck]
 
-    wins = ties = 0
-    board_needed = 5 - len(board_cards)
+        wins = ties = 0
+        board_needed = 5 - len(board_cards)
 
-    for _ in range(iters):
-        rng.shuffle(deck_eval)
+        for _ in range(iters):
+            rng.shuffle(deck_eval)
 
-        opp_hands = []
-        idx = 0
-        for _ in range(n_opponents):
-            opp_hands.append(deck_eval[idx:idx+2])
-            idx += 2
+            opp_hands = []
+            idx = 0
+            for _ in range(n_opponents):
+                opp_hands.append(deck_eval[idx:idx+2])
+                idx += 2
 
-        sim_board = board_eval[:]
-        if board_needed > 0:
-            sim_board = sim_board + deck_eval[idx:idx + board_needed]
+            sim_board = board_eval[:]
+            if board_needed > 0:
+                sim_board = sim_board + deck_eval[idx:idx + board_needed]
 
-        our_score = eval7.evaluate(your_eval + sim_board)
+            # eval7.evaluate accepts 5–7 cards; we cap at 7 for safety
+            our_hand = (your_eval + sim_board)[:7]
+            our_score = eval7.evaluate(our_hand)
 
-        better = equal = 0
-        for opp in opp_hands:
-            opp_score = eval7.evaluate(opp + sim_board)
-            if opp_score > our_score:
-                better += 1
-            elif opp_score == our_score:
-                equal += 1
+            better = equal = 0
+            for opp in opp_hands:
+                opp_hand = (opp + sim_board)[:7]
+                opp_score = eval7.evaluate(opp_hand)
+                if opp_score > our_score:
+                    better += 1
+                elif opp_score == our_score:
+                    equal += 1
 
-        if better == 0 and equal == 0:
-            wins += 1
-        elif better == 0 and equal > 0:
-            ties += 1
+            if better == 0 and equal == 0:
+                wins += 1
+            elif better == 0 and equal > 0:
+                ties += 1
 
-    total = float(iters)
-    if total == 0:
+        total = float(iters)
+        if total == 0:
+            return 0.5
+        return (wins + 0.5 * ties) / total
+    except Exception:
+        # Any weirdness in eval7 or card handling → neutral equity
         return 0.5
-    return (wins + 0.5 * ties) / total
 
 
 # ----------------- Board texture -----------------
@@ -94,11 +101,8 @@ def evaluate_terminal(pot, stack, to_call, your_cards, board, n_opponents, rng, 
         # fallback: neutral
         return 0.0
 
-    # if we fold, EV = 0 relative to current pot (we give up our invested chips)
     fold_ev = 0.0
 
-    # if we call, we invest to_call and play for pot + to_call
-    # approximate equity with small number of iterations
     iters = 200
     eq = estimate_equity_vs_random(your_cards, board, n_opponents, iters, rng)
     win_pot = pot + to_call
@@ -118,7 +122,6 @@ def search_action(state, time_left):
 
     your_cards = state["your_cards"]
     board = state["community_cards"]
-    street = state["street"]
     pot = float(state["pot"])
     stack = float(state["your_stack"])
     to_call = float(state["amount_owed"])
@@ -126,17 +129,15 @@ def search_action(state, time_left):
     min_raise_to = int(state["min_raise_to"])
     current_bet = float(state["current_bet"])
 
-    n_opponents = sum(1 for p in state["players"] if not p["has_folded"]) - 1
+    n_opponents = sum(1 for p in state["players"] if not p.get("has_folded", False)) - 1
     n_opponents = max(1, n_opponents)
 
     tex = board_texture(board)
 
     # facing a bet
     if to_call > 0:
-        # 1) Fold EV: 0 (relative)
         fold_ev = 0.0
 
-        # 2) Call EV: evaluate terminal
         call_ev = evaluate_terminal(
             pot=pot,
             stack=stack,
@@ -148,13 +149,9 @@ def search_action(state, time_left):
             time_left=time_left
         )
 
-        # 3) Raise EV: approximate by assuming villain calls with some frequency
-        # and we realize equity on a bigger pot.
         if time_left() <= 0:
-            # choose between fold and call
             return "fold" if fold_ev >= call_ev else "call"
 
-        # choose a raise size family
         if tex["dry"]:
             mult_min, mult_max = 2.0, 2.8
         else:
@@ -162,24 +159,21 @@ def search_action(state, time_left):
 
         raise_total = max(min_raise_to, int(current_bet + to_call * mult_min))
         raise_total = min(raise_total, int(current_bet + stack))
+
         if raise_total <= current_bet + to_call:
             raise_ev = call_ev  # can't really raise
         else:
-            # approximate: villain folds some %; if called, we play for bigger pot
-            # use small equity sample
             iters = 150
             eq = estimate_equity_vs_random(your_cards, board, n_opponents, iters, rng)
             pot_if_called = pot + to_call + (raise_total - current_bet)
             risk = raise_total - current_bet
 
-            # assume villain folds more on dry boards
             fold_freq = 0.35 if tex["wet"] else 0.50
             call_freq = 1.0 - fold_freq
 
             win_ev = eq * pot_if_called - (1 - eq) * risk
             raise_ev = fold_freq * pot + call_freq * win_ev
 
-        # choose best
         best_ev = max(fold_ev, call_ev, raise_ev)
         if best_ev == fold_ev:
             return "fold"
@@ -190,15 +184,11 @@ def search_action(state, time_left):
 
     # no bet to call
     if can_check:
-        # consider check vs bet
-        # 1) Check EV: approximate as 0 baseline
         check_ev = 0.0
 
         if time_left() <= 0:
             return "check"
 
-        # 2) Bet EV: bluff/value depending on equity
-        # approximate equity quickly
         iters = 200
         eq = estimate_equity_vs_random(your_cards, board, n_opponents, iters, rng)
 
@@ -210,7 +200,6 @@ def search_action(state, time_left):
         bet_total = max(min_raise_to, int(current_bet + pot * min_mult))
         bet_total = min(bet_total, int(current_bet + stack))
 
-        # assume villain folds some %; if called, we realize equity
         fold_freq = 0.40 if tex["dry"] else 0.30
         call_freq = 1.0 - fold_freq
 
@@ -220,12 +209,12 @@ def search_action(state, time_left):
         win_ev = eq * pot_if_called - (1 - eq) * risk
         bet_ev = fold_freq * pot + call_freq * win_ev
 
-        if bet_ev > check_ev:
-            return ("bet", bet_total)
+        if bet_ev > check_ev and bet_total > current_bet:
+            # treat as raise for engine
+            return ("raise", bet_total)
         else:
             return "check"
 
-    # fallback
     return "call"
 
 
@@ -238,37 +227,46 @@ def decide(state: dict) -> dict:
     def time_left():
         return budget - (time.perf_counter() - start)
 
-    your_cards = state["your_cards"]
-    board = state["community_cards"]
-    pot = float(state["pot"])
-    stack = float(state["your_stack"])
-    to_call = float(state["amount_owed"])
-    can_check = state["can_check"]
+    try:
+        your_cards = state["your_cards"]
+        board = state["community_cards"]
+        pot = float(state["pot"])
+        stack = float(state["your_stack"])
+        to_call = float(state["amount_owed"])
+        can_check = state["can_check"]
+        current_bet = float(state["current_bet"])
 
-    if stack <= 0:
-        return {"action": "call"} if to_call > 0 else {"action": "check"}
+        if stack <= 0:
+            return {"action": "call"} if to_call > 0 else {"action": "check"}
 
-    # run one depth-limited search within time budget
-    action = search_action(state, time_left)
+        action = search_action(state, time_left)
 
-    if isinstance(action, tuple):
-        kind, amount = action
-        if kind == "raise" or kind == "bet":
-            # engine uses "raise" even when first in
-            if amount >= state["current_bet"] + stack * 0.95:
-                return {"action": "all_in"}
-            return {"action": "raise", "amount": int(amount)}
+        if isinstance(action, tuple):
+            kind, amount = action
+            if kind in ("raise", "bet"):
+                # all-in heuristic
+                if amount >= current_bet + stack * 0.95:
+                    return {"action": "all_in"}
+                return {"action": "raise", "amount": int(amount)}
 
-    if action == "fold":
-        return {"action": "fold"}
-    if action == "call":
+        if action == "fold":
+            return {"action": "fold"}
+        if action == "call":
+            if to_call == 0 and can_check:
+                return {"action": "check"}
+            return {"action": "call"}
+        if action == "check":
+            if can_check:
+                return {"action": "check"}
+            return {"action": "call"}
+
+        # safety fallback
+        return {"action": "call"}
+
+    except Exception:
+        # Absolute safety net: never crash the bot, just make a legal conservative action
+        to_call = float(state.get("amount_owed", 0))
+        can_check = bool(state.get("can_check", False))
         if to_call == 0 and can_check:
             return {"action": "check"}
         return {"action": "call"}
-    if action == "check":
-        if can_check:
-            return {"action": "check"}
-        return {"action": "call"}
-
-    # safety fallback
-    return {"action": "call"}

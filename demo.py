@@ -22,20 +22,21 @@ app = Flask(__name__)
 
 BOT_PATHS = {
 
-    "The Aggressor":    "bots/aggressor/bot.py",
-    "The Mathematician":"bots/mathematician/bot.py",
-    "The Shark":        "bots/shark/bot.py",
-    "Template Bot A":   "bots/template/bot.py",
-    "MC.1.0":   "bots/maximus_bot/bot.py",
+#    "The Aggressor":    "bots/aggressor/bot.py",
+#    "The Mathematician":"bots/mathematician/bot.py",
+#    "The Shark":        "bots/shark/bot.py",
+#    "Template Bot A":   "bots/template/bot.py",
+#    "MC.1.0":   "bots/maximus_bot/bot.py",
     "MC.1.1":   "bots/maximus_bot/bot2.py",
     
-#    "MC.1.2":   "bots/maximus_bot/bot3.py",
-#   "MC.1.3":   "bots/maximus_bot/best.py",
-   "miniCFR":   "bots/maximus_bot/bot4.py",
-#    "CFR":   "bots/maximus_bot/CFR.py",
+    "CFR.1.0":   "bots/maximus_bot/CFR.py",
+    "MC.1.2":   "bots/maximus_bot/bot3.py",
+    "Mixed":   "bots/maximus_bot/mixed.py",
+    "Best":   "bots/maximus_bot/best.py",
+    "CFR.1.1":   "bots/maximus_bot/CFR2.py",
 #    "GT.1.0":   "bots/maximus_bot/gametree.py",
 #    "GT.1.1":   "bots/maximus_bot/longtree.py",
-#    "heuristic": "evolution/bots/heuristic/h_000.py",
+
 }
 
 state = {
@@ -332,7 +333,7 @@ def run_tournament():
     state["standings"] = []
     all_results = []
 
-    for rnd in range(1, 30):
+    for rnd in range(1, 40):
         state["round"] = rnd
         emit(f"=== ROUND {rnd} ===", "bold")
 

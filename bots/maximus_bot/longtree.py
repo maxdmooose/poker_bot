@@ -13,6 +13,18 @@ SUITS = "cdhs"
 FULL_DECK = [r + s for r in RANKS for s in SUITS]
 
 
+# ----------------- Safe eval wrapper -----------------
+
+def safe_eval(cards):
+    """Safe wrapper around eval7.evaluate: never crashes, tolerates <5 cards."""
+    try:
+        if len(cards) < 5:
+            return 0
+        return eval7.evaluate(cards[:7])
+    except Exception:
+        return 0
+
+
 # ----------------- Equity -----------------
 
 def equity_sample(your_cards, board_cards, n_opps, iters, rng):
@@ -26,11 +38,16 @@ def equity_sample(your_cards, board_cards, n_opps, iters, rng):
     wins = ties = 0
     need = 5 - len(board_cards)
 
+    if n_opps * 2 + max(0, need) > len(deck_eval):
+        # extremely degenerate, just return neutral
+        return 0.5
+
     for _ in range(iters):
+        # sample fresh cards each iteration to avoid index overflow
         rng.shuffle(deck_eval)
+        idx = 0
 
         opps = []
-        idx = 0
         for _ in range(n_opps):
             opps.append(deck_eval[idx:idx+2])
             idx += 2
@@ -39,11 +56,11 @@ def equity_sample(your_cards, board_cards, n_opps, iters, rng):
         if need > 0:
             sim_board += deck_eval[idx:idx+need]
 
-        our = eval7.evaluate(yc + sim_board)
+        our = safe_eval(yc + sim_board)
 
         better = equal = 0
         for opp in opps:
-            os = eval7.evaluate(opp + sim_board)
+            os = safe_eval(opp + sim_board)
             if os > our:
                 better += 1
             elif os == our:
@@ -87,7 +104,6 @@ def texture(board):
 
 def villain_response_probs(board_tex, pot, bet_size, street):
     # Simple heuristic villain model: fold/call/raise probabilities
-    # Larger bets and drier boards -> more folds, fewer raises.
     pot_ratio = bet_size / max(1.0, pot)
     pot_ratio = max(0.1, min(3.0, pot_ratio))
 
@@ -110,6 +126,8 @@ def villain_response_probs(board_tex, pot, bet_size, street):
     base_call = max(0.05, 1.0 - base_fold - base_raise)
 
     s = base_fold + base_call + base_raise
+    if s <= 0:
+        return (0.33, 0.33, 0.34)
     return (base_fold / s, base_call / s, base_raise / s)
 
 
@@ -165,10 +183,8 @@ def search_node(state, your_cards, board, n_opps, depth, max_depth, rng, time_le
 
     # Facing a bet: actions = fold, call, raise (3 sizes)
     if to_call > 0:
-        # Fold EV
         fold_ev = 0.0
 
-        # Call EV: create new state where we call and villain checks down
         call_state = clone_state(state)
         call_state["pot"] = pot + to_call
         call_state["your_stack"] = max(0.0, stack - to_call)
@@ -179,9 +195,7 @@ def search_node(state, your_cards, board, n_opps, depth, max_depth, rng, time_le
         call_ev = search_node(call_state, your_cards, board, n_opps,
                               depth + 1, max_depth, rng, time_left, iters_hint * 0.7)
 
-        # Raise EVs: three sizes
         raise_evs = []
-        raise_sizes = []
 
         if tex["dry"]:
             mults = [1.8, 2.3, 2.8]
@@ -195,7 +209,6 @@ def search_node(state, your_cards, board, n_opps, depth, max_depth, rng, time_le
             total = min(total, int(cur_bet + stack))
             if total <= cur_bet + to_call:
                 continue
-            raise_sizes.append(total)
 
             bet_size = total - cur_bet
             risk = bet_size
@@ -203,10 +216,8 @@ def search_node(state, your_cards, board, n_opps, depth, max_depth, rng, time_le
 
             fold_p, call_p, raise_p = villain_response_probs(tex, pot, bet_size, street)
 
-            # Villain folds: we win pot + to_call
             fold_outcome = pot + to_call
 
-            # Villain calls: we go to leaf or deeper node
             call_state2 = clone_state(state)
             call_state2["pot"] = pot_if_called
             call_state2["your_stack"] = max(0.0, stack - risk - to_call)
@@ -215,7 +226,6 @@ def search_node(state, your_cards, board, n_opps, depth, max_depth, rng, time_le
             call_state2["current_bet"] = total
             call_state2 = advance_street_if_needed(call_state2)
 
-            # Approximate EV of called raise via equity
             if depth + 1 >= max_depth or time_left() <= 0:
                 eq = equity_sample(your_cards, board, n_opps, max(40, int(iters_hint * 0.5)), rng)
                 call_ev_local = eq * pot_if_called - (1 - eq) * risk
@@ -223,8 +233,6 @@ def search_node(state, your_cards, board, n_opps, depth, max_depth, rng, time_le
                 call_ev_local = search_node(call_state2, your_cards, board, n_opps,
                                             depth + 1, max_depth, rng, time_left, iters_hint * 0.6)
 
-            # Villain re-raises: we approximate as bad for us, small negative EV
-            # (we could expand further, but depth is limited)
             reraise_ev = -0.3 * risk
 
             total_ev = fold_p * fold_outcome + call_p * call_ev_local + raise_p * reraise_ev
@@ -236,7 +244,6 @@ def search_node(state, your_cards, board, n_opps, depth, max_depth, rng, time_le
 
     # No bet to call: actions = check, bet (3 sizes)
     if can_check:
-        # Check EV: assume pot control, go to leaf or shallow node
         check_state = clone_state(state)
         check_state["amount_owed"] = 0.0
         check_state["can_check"] = True
@@ -267,10 +274,8 @@ def search_node(state, your_cards, board, n_opps, depth, max_depth, rng, time_le
 
             fold_p, call_p, raise_p = villain_response_probs(tex, pot, bet_size, street)
 
-            # Villain folds: we win pot
             fold_outcome = pot
 
-            # Villain calls: go deeper or leaf
             call_state = clone_state(state)
             call_state["pot"] = pot_if_called
             call_state["your_stack"] = max(0.0, stack - risk)
@@ -286,7 +291,6 @@ def search_node(state, your_cards, board, n_opps, depth, max_depth, rng, time_le
                 call_ev_local = search_node(call_state, your_cards, board, n_opps,
                                             depth + 1, max_depth, rng, time_left, iters_hint * 0.6)
 
-            # Villain raises over our bet: approximate as bad
             reraise_ev = -0.4 * risk
 
             total_ev = fold_p * fold_outcome + call_p * call_ev_local + raise_p * reraise_ev
@@ -296,7 +300,7 @@ def search_node(state, your_cards, board, n_opps, depth, max_depth, rng, time_le
 
         return max(check_ev, best_bet_ev)
 
-    # Fallback if can_check is False but to_call == 0 (shouldn't happen often)
+    # Fallback
     return evaluate_leaf(state, your_cards, board, n_opps, rng, time_left, iters_hint)
 
 
@@ -315,10 +319,8 @@ def choose_root_action(state, your_cards, board, n_opps, max_depth, time_left):
 
     # Facing bet: evaluate fold, call, 3 raise sizes
     if to_call > 0:
-        # Fold
         fold_ev = 0.0
 
-        # Call
         call_state = clone_state(state)
         call_state["pot"] = pot + to_call
         call_state["your_stack"] = max(0.0, stack - to_call)
@@ -329,7 +331,6 @@ def choose_root_action(state, your_cards, board, n_opps, max_depth, time_left):
         call_ev = search_node(call_state, your_cards, board, n_opps,
                               1, max_depth, rng, time_left, iters_hint)
 
-        # Raises
         raise_candidates = []
         if tex["dry"]:
             mults = [1.8, 2.3, 2.8]
@@ -372,11 +373,11 @@ def choose_root_action(state, your_cards, board, n_opps, max_depth, time_left):
             total_ev = fold_p * fold_outcome + call_p * call_ev_local + raise_p * reraise_ev
             raise_candidates.append((total_ev, total))
 
-        best_raise_ev, best_raise_amt = (float("-inf"), None)
         if raise_candidates:
             best_raise_ev, best_raise_amt = max(raise_candidates, key=lambda x: x[0])
+        else:
+            best_raise_ev, best_raise_amt = (float("-inf"), None)
 
-        # Choose best root action
         best_ev = fold_ev
         best_action = ("fold", None)
 
@@ -441,11 +442,12 @@ def choose_root_action(state, your_cards, board, n_opps, max_depth, time_left):
             total_ev = fold_p * fold_outcome + call_p * call_ev_local + raise_p * reraise_ev
             bet_candidates.append((total_ev, total))
 
-        best_bet_ev, best_bet_amt = (float("-inf"), None)
         if bet_candidates:
             best_bet_ev, best_bet_amt = max(bet_candidates, key=lambda x: x[0])
+        else:
+            best_bet_ev, best_bet_amt = (float("-inf"), None)
 
-        if best_bet_ev > check_ev:
+        if best_bet_ev > check_ev and best_bet_amt is not None:
             return ("bet", best_bet_amt)
         else:
             return ("check", None)
@@ -463,49 +465,54 @@ def decide(state: dict) -> dict:
     def time_left():
         return BUDGET - (time.perf_counter() - start)
 
-    your_cards = state["your_cards"]
-    board = state["community_cards"]
-    stack = float(state["your_stack"])
-    to_call = float(state["amount_owed"])
-    can_check = state["can_check"]
+    try:
+        your_cards = state["your_cards"]
+        board = state["community_cards"]
+        stack = float(state["your_stack"])
+        to_call = float(state["amount_owed"])
+        can_check = state["can_check"]
 
-    if stack <= 0:
-        return {"action": "call"} if to_call > 0 else {"action": "check"}
+        if stack <= 0:
+            return {"action": "call"} if to_call > 0 else {"action": "check"}
 
-    n_opps = sum(1 for p in state["players"] if not p["has_folded"]) - 1
-    n_opps = max(1, n_opps)
+        n_opps = sum(1 for p in state["players"] if not p["has_folded"]) - 1
+        n_opps = max(1, n_opps)
 
-    # Depth-3 search
-    max_depth = 3
-    action, amount = choose_root_action(state, your_cards, board, n_opps, max_depth, time_left)
+        max_depth = 3
+        action, amount = choose_root_action(state, your_cards, board, n_opps, max_depth, time_left)
 
-    # Map to engine actions
-    if action == "fold":
-        if to_call > 0:
-            return {"action": "fold"}
-        return {"action": "check"} if can_check else {"action": "fold"}
+        if action == "fold":
+            if to_call > 0:
+                return {"action": "fold"}
+            return {"action": "check"} if can_check else {"action": "fold"}
 
-    if action == "call":
-        if to_call == 0 and can_check:
-            return {"action": "check"}
-        return {"action": "call"}
-
-    if action in ("raise", "bet"):
-        if amount is None:
-            # fallback
+        if action == "call":
             if to_call == 0 and can_check:
                 return {"action": "check"}
             return {"action": "call"}
-        amount = int(amount)
-        current_bet = float(state["current_bet"])
-        if amount >= current_bet + stack * 0.95:
-            return {"action": "all_in"}
-        return {"action": "raise", "amount": amount}
 
-    if action == "check":
-        if can_check:
-            return {"action": "check"}
+        if action in ("raise", "bet"):
+            if amount is None:
+                if to_call == 0 and can_check:
+                    return {"action": "check"}
+                return {"action": "call"}
+            amount = int(amount)
+            current_bet = float(state["current_bet"])
+            if amount >= current_bet + stack * 0.95:
+                return {"action": "all_in"}
+            return {"action": "raise", "amount": amount}
+
+        if action == "check":
+            if can_check:
+                return {"action": "check"}
+            return {"action": "call"}
+
         return {"action": "call"}
 
-    # Safety fallback
-    return {"action": "call"}
+    except Exception:
+        # Absolute safety net
+        to_call = float(state.get("amount_owed", 0))
+        can_check = bool(state.get("can_check", False))
+        if to_call == 0 and can_check:
+            return {"action": "check"}
+        return {"action": "call"}
