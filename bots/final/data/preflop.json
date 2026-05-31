@@ -1,0 +1,150 @@
+{
+  "UTG": {
+    "open": [
+      "AA","KK","QQ","JJ","TT","99","88","77",
+      "AKs","AQs","AJs","ATs","KQs","KJs","QJs","JTs",
+      "AKo","AQo"
+    ],
+    "call_vs_open": [],
+    "3bet": [
+      "AA","KK","QQ","JJ","AKs","AQs","AKo"
+    ],
+    "call_vs_3bet": [
+      "QQ","JJ","TT","AKs","AQs"
+    ],
+    "4bet": [
+      "AA","KK","AKs","AKo"
+    ],
+    "squeeze": []
+  },
+
+  "MP": {
+    "open": [
+      "AA","KK","QQ","JJ","TT","99","88","77","66",
+      "AKs","AQs","AJs","ATs","A9s","KQs","KJs","QJs","JTs","T9s",
+      "AKo","AQo","AJo","KQo"
+    ],
+    "call_vs_open": [
+      "JJ","TT","99","AQs","AJs","KQs","QJs","JTs"
+    ],
+    "3bet": [
+      "AA","KK","QQ","JJ","TT","AKs","AQs","AJs","KQs","AKo"
+    ],
+    "call_vs_3bet": [
+      "JJ","TT","99","AQs","AJs","KQs"
+    ],
+    "4bet": [
+      "AA","KK","QQ","AKs","AKo"
+    ],
+    "squeeze": []
+  },
+
+  "CO": {
+    "open": [
+      "AA","KK","QQ","JJ","TT","99","88","77","66","55",
+      "AKs","AQs","AJs","ATs","A9s","A8s","A7s","A6s","A5s","A4s","A3s","A2s",
+      "KQs","KJs","KTs","QJs","QTs","JTs","T9s","98s","87s",
+      "AKo","AQo","AJo","ATo","KQo","KJo","QJo"
+    ],
+    "call_vs_open": [
+      "TT","99","88","AQs","AJs","ATs","KQs","QJs","JTs","T9s"
+    ],
+    "3bet": [
+      "AA","KK","QQ","JJ","TT","99","AKs","AQs","AJs","ATs","KQs","AKo"
+    ],
+    "call_vs_3bet": [
+      "TT","99","88","AQs","AJs","ATs","KQs","QJs","JTs"
+    ],
+    "4bet": [
+      "AA","KK","QQ","JJ","AKs","AQs","AKo"
+    ],
+    "squeeze": [
+      "AA","KK","QQ","JJ","TT","99",
+      "AKs","AQs","AJs","ATs","KQs",
+      "AKo","AQo"
+    ]
+  },
+
+  "BTN": {
+    "open": [
+      "AA","KK","QQ","JJ","TT","99","88","77","66","55","44","33","22",
+      "AKs","AQs","AJs","ATs","A9s","A8s","A7s","A6s","A5s","A4s","A3s","A2s",
+      "KQs","KJs","KTs","K9s","QJs","QTs","Q9s","JTs","J9s","T9s","98s","87s","76s","65s",
+      "AKo","AQo","AJo","ATo","A9o","KQo","KJo","QJo","JTo"
+    ],
+    "call_vs_open": [
+      "99","88","77","AQs","AJs","ATs","A9s",
+      "KQs","KJs","QJs","JTs","T9s","98s"
+    ],
+    "3bet": [
+      "AA","KK","QQ","JJ","TT","99","88",
+      "AKs","AQs","AJs","ATs","KQs","KJs",
+      "AKo","AQo"
+    ],
+    "call_vs_3bet": [
+      "99","88","77","AQs","AJs","ATs","KQs","KJs","QJs","JTs","T9s"
+    ],
+    "4bet": [
+      "AA","KK","QQ","JJ","AKs","AQs","AKo"
+    ],
+    "squeeze": [
+      "AA","KK","QQ","JJ","TT","99",
+      "AKs","AQs","AJs","ATs","KQs",
+      "AKo","AQo"
+    ]
+  },
+
+  "SB": {
+    "open": [
+      "AA","KK","QQ","JJ","TT","99","88","77","66","55","44","33","22",
+      "AKs","AQs","AJs","ATs","A9s","A8s","A7s","A6s","A5s","A4s","A3s","A2s",
+      "KQs","KJs","KTs","K9s","QJs","QTs","Q9s","JTs","J9s","T9s","98s","87s","76s","65s","54s",
+      "AKo","AQo","AJo","ATo","A9o","KQo","KJo","QJo","JTo"
+    ],
+    "limp": [
+      "A2s","A3s","A4s","A5s","A6s","A7s","A8s",
+      "K2s","K3s","K4s","K5s","K6s","K7s","K8s",
+      "Q4s","Q5s","Q6s","Q7s","Q8s",
+      "J6s","J7s","J8s",
+      "T6s","T7s","T8s",
+      "97s","86s","75s","64s","53s","43s",
+      "A2o","A3o","K8o","Q9o","J9o","T9o"
+    ],
+    "call_vs_open": [
+      "99","88","77","AQs","AJs","ATs","KQs","QJs","JTs","T9s"
+    ],
+    "3bet": [
+      "AA","KK","QQ","JJ","TT","99","88",
+      "AKs","AQs","AJs","ATs","KQs","KJs",
+      "AKo","AQo"
+    ],
+    "call_vs_3bet": [
+      "TT","99","88","AQs","AJs","ATs","KQs","QJs","JTs"
+    ],
+    "4bet": [
+      "AA","KK","QQ","JJ","AKs","AQs","AKo"
+    ],
+    "squeeze": [
+      "AA","KK","QQ","JJ","TT",
+      "AKs","AQs","AJs","KQs",
+      "AKo"
+    ]
+  },
+
+  "BB": {
+    "defend_vs_open": [
+      "AA","KK","QQ","JJ","TT","99","88","77","66","55","44","33","22",
+      "AKs","AQs","AJs","ATs","A9s","A8s","A7s","A6s","A5s","A4s","A3s","A2s",
+      "KQs","KJs","KTs","K9s","K8s","QJs","QTs","Q9s","JTs","J9s","T9s","98s","87s","76s","65s","54s","43s",
+      "AKo","AQo","AJo","ATo","A9o","KQo","KJo","QJo","JTo","T9o","98o"
+    ],
+    "3bet": [
+      "AA","KK","QQ","JJ","TT","AKs","AQs","AJs","KQs","AKo"
+    ],
+    "squeeze": [
+      "AA","KK","QQ","JJ","TT","99",
+      "AKs","AQs","AJs","KQs",
+      "AKo","AQo"
+    ]
+  }
+}

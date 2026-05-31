@@ -2,6 +2,9 @@ import subprocess
 import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
+import random
+import csv
+from datetime import datetime
 
 # ---------------------------------------------------------
 # CONFIGURATION
@@ -9,19 +12,21 @@ import os
 
 MATCH_PATH = "sandbox/match.py"
 
-# Up to 6 bots
 BOTS = [
-    "bots/maximus_bot/bot.py",
-    "bots/maximus_bot/bot2.py",
-    "bots/maximus_bot/bot3.py",
-    "bots/maximus_bot/CFR.py",
-    "bots/maximus_bot/best.py",
-    "bots/maximus_bot/gametree.py",
+    "bots/maximus_bot/CFRoptimized.py",
+    "bots/maximus_bot/tierS.py",
+#    "bots/final/best.py",
+    "bots/maximus_bot/CFRtierS.py",
+    "bots/maximus_bot/optimized.py",
+    "bots/final/final.py",
 ]
 
-HANDS_PER_ROUND = 50
-ROUNDS = 30
-MAX_WORKERS = 30   # number of parallel matches
+HANDS_PER_ROUND = 100
+ROUNDS = 120
+MAX_WORKERS = 60   # be sane: ~#physical cores
+
+LOG_TO_CSV = True
+CSV_PATH = f"results_fullhouse_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
 
 # ---------------------------------------------------------
@@ -29,10 +34,6 @@ MAX_WORKERS = 30   # number of parallel matches
 # ---------------------------------------------------------
 
 def bot_name_from_path(path):
-    """
-    Fullhouse uses the filename (without .py) as the bot name.
-    Example: bots/maximus_bot/bot3.py → bot3
-    """
     base = os.path.basename(path)
     return base.replace(".py", "")
 
@@ -41,41 +42,35 @@ def bot_name_from_path(path):
 # WORKER FUNCTION
 # ---------------------------------------------------------
 
-def run_single_round(round_index):
+def run_single_round(round_index, bots_for_round):
     """
-    Runs one match.py instance and returns chip deltas for all bots.
+    Runs one match.py instance with a specific seating order
+    and returns (bot_paths_in_this_round, chip_deltas_in_same_order).
     """
-
     cmd = [
         "python",
         MATCH_PATH,
-        "--json",                     # MUST come before bot list
+        "--json",
         "--hands", str(HANDS_PER_ROUND),
-        *BOTS
+        *bots_for_round,
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
-
     stdout = result.stdout.strip()
 
-    # Fullhouse prints JSON on the FIRST LINE, then human output.
-    # So we must extract ONLY the first line.
     try:
         first_line = stdout.splitlines()[0].strip()
         data = json.loads(first_line)
-
         deltas_dict = data["chip_delta"]
 
-        # Preserve bot order
-        deltas = [deltas_dict.get(bot_name_from_path(b), 0) for b in BOTS]
-
-        return deltas
+        deltas = [deltas_dict.get(bot_name_from_path(b), 0.0) for b in bots_for_round]
+        return bots_for_round, deltas
 
     except Exception as e:
         print(f"[Round {round_index}] ERROR parsing output")
         print("Raw output:", stdout)
         print("Exception:", e)
-        return [0] * len(BOTS)
+        return bots_for_round, [0.0] * len(bots_for_round)
 
 
 # ---------------------------------------------------------
@@ -83,27 +78,63 @@ def run_single_round(round_index):
 # ---------------------------------------------------------
 
 def main():
-    cumulative = [0] * len(BOTS)
+    # global cumulative results keyed by bot path
+    cumulative = {b: 0.0 for b in BOTS}
+    total_hands_per_bot = {b: 0 for b in BOTS}
+
+    if LOG_TO_CSV:
+        csv_file = open(CSV_PATH, "w", newline="")
+        csv_writer = csv.writer(csv_file)
+        header = ["round_index"] + [bot_name_from_path(b) for b in BOTS]
+        csv_writer.writerow(header)
+    else:
+        csv_file = csv_writer = None
 
     print(f"Running {ROUNDS} rounds in parallel...\n")
 
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(run_single_round, i): i
-            for i in range(ROUNDS)
-        }
+        futures = {}
+
+        for i in range(ROUNDS):
+            # randomize seating each round to remove positional bias
+            bots_for_round = BOTS[:]
+            random.shuffle(bots_for_round)
+            fut = executor.submit(run_single_round, i, bots_for_round)
+            futures[fut] = (i, bots_for_round)
 
         for future in as_completed(futures):
-            idx = futures[future]
-            deltas = future.result()
-            cumulative = [c + d for c, d in zip(cumulative, deltas)]
-            print(f"Round {idx+1}/{ROUNDS} complete → {deltas}")
+            round_idx, bots_for_round = futures[future]
+            bots_round, deltas = future.result()
+
+            # accumulate into global per-bot totals
+            for b, d in zip(bots_round, deltas):
+                cumulative[b] += d
+                total_hands_per_bot[b] += HANDS_PER_ROUND
+
+            # log per-round row in canonical bot order
+            if csv_writer is not None:
+                row = [round_idx]
+                # map from this round's bot to its delta
+                d_map = {b: d for b, d in zip(bots_round, deltas)}
+                for b in BOTS:
+                    row.append(d_map.get(b, 0.0))
+                csv_writer.writerow(row)
+
+            print(f"Round {round_idx+1}/{ROUNDS} complete → {deltas}")
+
+    if csv_file is not None:
+        csv_file.close()
+        print(f"\nCSV written to: {CSV_PATH}")
 
     print("\n==============================")
     print(" FINAL CUMULATIVE CHIP DELTAS ")
     print("==============================")
-    for bot, delta in zip(BOTS, cumulative):
-        print(f"{bot:40s}  {delta:+.1f}")
+    for b in BOTS:
+        name = bot_name_from_path(b)
+        delta = cumulative[b]
+        hands = total_hands_per_bot[b]
+        ev_per_100 = (delta / hands) * 100 if hands > 0 else 0.0
+        print(f"{name:20s}  Δchips = {delta:+.1f}   EV/100 = {ev_per_100:+.2f}")
 
 
 if __name__ == "__main__":

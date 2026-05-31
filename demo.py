@@ -1,7 +1,7 @@
 """
 Fullhouse Hackathon — Local Demo
 Run: python demo.py
-Open: http://localhost:5000
+Open: http://localhost:5001
 
 No Docker, Redis, or Supabase needed.
 Runs real matches using the actual game engine and shows results live.
@@ -21,22 +21,12 @@ app = Flask(__name__)
 # ---------------------------------------------------------------------------
 
 BOT_PATHS = {
-
-#    "The Aggressor":    "bots/aggressor/bot.py",
-#    "The Mathematician":"bots/mathematician/bot.py",
-#    "The Shark":        "bots/shark/bot.py",
-#    "Template Bot A":   "bots/template/bot.py",
-#    "MC.1.0":   "bots/maximus_bot/bot.py",
-    
-    "CFR.1.0":   "bots/maximus_bot/CFR.py",
-    "MC.1.2":   "bots/maximus_bot/bot3.py",
-    "Mixed":   "bots/maximus_bot/mixed.py",
-    "MC.1.1":   "bots/maximus_bot/bot2.py",
-    "CFR.1.1":   "bots/maximus_bot/CFR2.py",
-    "Best":   "bots/maximus_bot/best.py",
-#    "GT.1.0":   "bots/maximus_bot/gametree.py",
-#    "GT.1.1":   "bots/maximus_bot/longtree.py",
-
+    "MCadjusted":    "bots/maximus_bot/MCadjusted.py",
+    "bot3":"bots/maximus_bot/bot3.py",
+    "bot2":        "bots/maximus_bot/bot2.py",
+    "CFRoptimized":   "bots/maximus_bot/CFRoptimized.py",
+    "CFRtierS":   "bots/maximus_bot/CFRtierS.py",
+    "tierS":   "bots/maximus_bot/tierS.py",
 }
 
 state = {
@@ -67,7 +57,7 @@ PAGE = r"""<!DOCTYPE html>
 body { background: #080c08; color: #00ff41; font-family: 'Share Tech Mono', 'Courier New', monospace; font-size: 14px; }
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
 
-.grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr 260px; gap: 1px; height: 100vh; background: #1a2e1a; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr auto; gap: 1px; min-height: 100vh; background: #1a2e1a; }
 .panel { background: #080c08; padding: 16px; overflow: hidden; display: flex; flex-direction: column; }
 .header { grid-column: 1 / -1; border-bottom: 1px solid #00ff41; padding: 12px 16px; display: flex; align-items: center; gap: 24px; }
 .logo { font-size: 18px; letter-spacing: 2px; }
@@ -108,7 +98,11 @@ button:disabled:hover { background: transparent; color: #00ff41; }
 @keyframes pulse { 50% { opacity: 0.5; } }
 
 /* Hand replay */
-#replay { flex: 1; overflow-y: auto; font-size: 12px; }
+#replay { max-height: 60vh; overflow-y: auto; font-size: 12px; }
+details.replay-wrap > summary { cursor: pointer; list-style: none; color: #00cc33; font-size: 12px; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 12px; user-select: none; }
+details.replay-wrap > summary::-webkit-details-marker { display: none; }
+details.replay-wrap > summary::before { content: '▾ '; color: #00ff41; }
+details.replay-wrap:not([open]) > summary::before { content: '▸ '; }
 .hand-card { border: 1px solid #1a2e1a; padding: 8px 10px; margin-bottom: 6px; }
 .hand-card:hover { border-color: #3a6e3a; }
 .hand-meta { color: #3a6e3a; font-size: 11px; margin-bottom: 4px; }
@@ -145,9 +139,11 @@ button:disabled:hover { background: transparent; color: #00ff41; }
     </div>
   </div>
 
-  <div class="panel" style="grid-column:1/-1; max-height:260px;">
-    <h2>Last match — hand replay <span id="hand-count" style="color:#3a6e3a"></span></h2>
-    <div id="replay"></div>
+  <div class="panel" style="grid-column:1/-1;">
+    <details class="replay-wrap" open>
+      <summary>Last match — hand replay <span id="hand-count" style="color:#3a6e3a"></span> <span style="color:#3a6e3a;text-transform:none;letter-spacing:0;font-size:11px">(click to collapse)</span></summary>
+      <div id="replay"></div>
+    </details>
   </div>
 </div>
 
@@ -186,22 +182,32 @@ function setRunning(v) {
 async function runSingle() {
   if (running) return;
   setRunning(true);
-  const res = await fetch('/run/match', { method: 'POST' });
-  const data = await res.json();
-  updateBoard(data.standings);
-  updateReplay(data.hands);
-  setRunning(false);
+  try {
+    const res = await fetch('/run/match', { method: 'POST' });
+    const data = await res.json();
+    updateBoard(data.standings);
+    updateReplay(data.hands);
+  } catch (err) {
+    addLog('match failed: ' + (err && err.message ? err.message : err), 'err');
+  } finally {
+    setRunning(false);
+  }
 }
 
 async function runTournament() {
   if (running) return;
   setRunning(true);
-  const res = await fetch('/run/tournament', { method: 'POST' });
-  const data = await res.json();
-  updateBoard(data.standings);
-  document.getElementById('round-label').textContent =
-    `Round ${data.round} complete — ${data.finalists} finalists selected`;
-  setRunning(false);
+  try {
+    const res = await fetch('/run/tournament', { method: 'POST' });
+    const data = await res.json();
+    updateBoard(data.standings);
+    document.getElementById('round-label').textContent =
+      `Round ${data.round} complete — ${data.finalists} finalists selected`;
+  } catch (err) {
+    addLog('tournament failed: ' + (err && err.message ? err.message : err), 'err');
+  } finally {
+    setRunning(false);
+  }
 }
 
 function updateBoard(standings) {
@@ -233,8 +239,8 @@ function updateReplay(hands) {
   el.innerHTML = '';
   document.getElementById('hand-count').textContent = `(${hands.length} hands)`;
 
-  // Show last 20 hands
-  const show = hands.slice(-20).reverse();
+  // Show all hands (newest first) — inner #replay scrolls via max-height + overflow-y
+  const show = hands.slice().reverse();
   show.forEach(h => {
     const r = h.result;
     const winner = r.winners?.map(w => w.bot_id).join(', ') || '?';
@@ -293,7 +299,7 @@ def run_single_match():
     emit(f"Starting match {match_id}...", "dim")
     t0 = time.time()
 
-    result = run_match(match_id, BOT_PATHS, n_hands=50, verbose=False)
+    result = run_match(match_id, BOT_PATHS, n_hands=150, verbose=False)
     elapsed = time.time() - t0
 
     emit(f"Match complete in {elapsed:.1f}s", "dim")
@@ -333,7 +339,7 @@ def run_tournament():
     state["standings"] = []
     all_results = []
 
-    for rnd in range(1, 50):
+    for rnd in range(1, 10):
         state["round"] = rnd
         emit(f"=== ROUND {rnd} ===", "bold")
 
@@ -348,7 +354,7 @@ def run_tournament():
 
             emit(f"  Table {t_idx+1}: {', '.join(bot_paths_for_match.keys())}", "dim")
 
-            result = run_match(match_id, bot_paths_for_match, n_hands=50)
+            result = run_match(match_id, bot_paths_for_match, n_hands=150)
 
             for bid, delta in result["chip_delta"].items():
                 all_results.append({
@@ -384,7 +390,8 @@ if __name__ == "__main__":
     print("\n" + "="*50)
     print("  FULLHOUSE HACKATHON — LOCAL DEMO")
     print("="*50)
-    print("  Open:  http://localhost:5000")
+    port = int(os.environ.get("DEMO_PORT", "5001"))
+    print(f"  Open:  http://localhost:{port}")
     print("  Bots:  ", ", ".join(BOT_PATHS.keys()))
     print("="*50 + "\n")
-    app.run(debug=False, threaded=True, port=5000)
+    app.run(debug=False, threaded=True, port=port)
